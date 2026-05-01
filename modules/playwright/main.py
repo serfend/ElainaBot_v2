@@ -35,6 +35,7 @@ log = get_logger(EXTENSION, "Playwright")
 _instance = None
 
 _DEFAULTS = {
+    'enabled': False,
     'headless': True,
     'max_pages': 5,
     'idle_timeout': 300,
@@ -53,6 +54,7 @@ _DEFAULTS = {
 }
 
 _COMMENTS = {
+    'enabled': '是否启用 Playwright (关闭后不会启动任何浏览器进程)',
     'headless': '是否无头模式 (无界面)',
     'max_pages': '最大并发页面数',
     'idle_timeout': '浏览器空闲超时 (秒), 超时后自动关闭, 下次使用时重新启动',
@@ -71,6 +73,10 @@ _COMMENTS = {
 async def setup(ctx):
     global _instance
     cfg = ctx.ensure_config(_DEFAULTS, comments=_COMMENTS)
+    if not cfg.get('enabled', True):
+        log.info("⏭️ Playwright 已禁用")
+        _instance = PlaywrightRenderer(cfg, disabled=True)
+        return _instance
     _instance = PlaywrightRenderer(cfg)
     await _instance.initialize()
     if _instance.is_available():
@@ -97,11 +103,12 @@ class PlaywrightRenderer:
     __slots__ = (
         '_cfg', '_pw', '_browser', '_semaphore',
         '_available', '_lock', '_active_pages',
-        '_last_release', '_cleanup_task',
+        '_last_release', '_cleanup_task', '_disabled',
     )
 
-    def __init__(self, cfg):
+    def __init__(self, cfg, disabled=False):
         self._cfg = cfg
+        self._disabled = disabled
         self._pw = None
         self._browser = None
         self._semaphore = asyncio.Semaphore(cfg.get('max_pages', 5))
@@ -123,7 +130,7 @@ class PlaywrightRenderer:
             self._available = False
 
     def is_available(self):
-        return self._available and self._pw is not None
+        return not self._disabled and self._available and self._pw is not None
 
     async def close(self):
         self._available = False
@@ -205,6 +212,8 @@ class PlaywrightRenderer:
                 await page.goto(url)
                 data = await page.screenshot()
         """
+        if self._disabled:
+            raise RuntimeError("Playwright 已禁用, 请在配置中设置 enabled: true")
         if not self._available:
             raise RuntimeError("Playwright 不可用")
 

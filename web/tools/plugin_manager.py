@@ -647,9 +647,7 @@ async def handle_save_config(request: web.Request):
     # 验证格式
     if fmt == 'yaml':
         try:
-            data = yaml.safe_load(content)
-            # 重新格式化
-            content = yaml.dump(data, allow_unicode=True, default_flow_style=False, sort_keys=False)
+            yaml.safe_load(content)  # 仅验证语法, 不重新序列化, 保留注释
         except Exception as e:
             return web.json_response({'success': False, 'message': f'YAML 格式错误: {e}'}, status=400)
     elif fmt == 'json':

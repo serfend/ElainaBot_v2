@@ -219,6 +219,10 @@ class PluginManager:
         else:
             await self.load(name)
         self._rebuild_handler_list()
+        info = self._plugins.get(name)
+        count = len(info.handlers) if info else 0
+        t = f'{info.load_time:.2f}s' if info else '?'
+        log.info(f"🔄 插件热重载: {name} ({count} 个处理器, {t})")
         return True
 
     async def unload(self, name):

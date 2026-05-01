@@ -523,6 +523,13 @@ class MessageSender:
             self._last_media_label = ''
             text = f'{label} {text}'.rstrip() if text else label
         reply_text = text or ''
+        # 将完整按钮结构附加到日志文本
+        kb = payload.get('keyboard')
+        if kb:
+            try:
+                reply_text += '\n[keyboard] ' + json.dumps(kb, ensure_ascii=False)
+            except Exception:
+                pass
         user_id = getattr(event, 'user_id', '') or ''
         group_id = getattr(event, 'group_id', '') or ''
         if self._web_log_cb:

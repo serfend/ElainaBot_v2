@@ -193,13 +193,9 @@ class BotManager:
 
         # 3. 校验机器人配置
         bot_configs = cfg.get_bot_configs()
-        if not bot_configs:
-            log.error("未配置任何机器人, 请编辑 config/bot.yaml")
-            return
         valid_bots = [b for b in bot_configs if b.get('appid') and b.get('secret')]
         if not valid_bots:
-            log.error("所有机器人配置均缺少 appid 或 secret")
-            return
+            log.warning("未配置有效的机器人 (缺少 appid/secret), 仅启动 Web 面板")
 
         # 4. 创建 HTTP 应用 (模块可能需要注册路由, 须在模块加载前创建)
         self._init_http_app()
@@ -236,10 +232,6 @@ class BotManager:
 
         # 注册 bot.yaml 热重载回调
         cfg.on_change('bot', self._on_bot_config_change)
-
-        if not self._bots:
-            log.error("没有成功启动的机器人")
-            return
 
         # 9. 启动 DAU 统计服务
         self._dau_service = DAUService(log_base)

@@ -26,6 +26,13 @@ def _get_updater():
     return _updater
 
 
+# ==================== 环境检测 ====================
+
+async def handle_detect_environment(request: web.Request):
+    from web.tools.updater import detect_environment
+    return web.json_response({'success': True, 'data': detect_environment()})
+
+
 # ==================== 更新日志 ====================
 
 async def handle_get_changelog(request: web.Request):
@@ -105,15 +112,16 @@ async def handle_start_update(request: web.Request):
         updater.set_custom_mirror(body['mirror'])
 
     skip_backup = body.get('skip_backup', False)
+    auto_restart = body.get('auto_restart', False)
 
     async def _do_update():
         try:
             if body.get('force'):
-                await updater.force_update(skip_backup=skip_backup)
+                await updater.force_update(skip_backup=skip_backup, auto_restart=auto_restart)
             elif body.get('version'):
-                await updater.update_to_version(body['version'], skip_backup=skip_backup)
+                await updater.update_to_version(body['version'], skip_backup=skip_backup, auto_restart=auto_restart)
             else:
-                await updater.update_to_latest(skip_backup=skip_backup)
+                await updater.update_to_latest(skip_backup=skip_backup, auto_restart=auto_restart)
         except Exception as e:
             updater._report('failed', f'更新出错: {e}', 0)
 
@@ -226,6 +234,7 @@ async def handle_upload_update(request: web.Request):
     # 读取额外字段
     version_name = None
     skip_backup = False
+    auto_restart = False
     while True:
         field = await reader.next()
         if field is None:
@@ -235,10 +244,12 @@ async def handle_upload_update(request: web.Request):
             version_name = val.strip() or None
         elif field.name == 'skip_backup':
             skip_backup = val.lower() in ('true', '1', 'yes')
+        elif field.name == 'auto_restart':
+            auto_restart = val.lower() in ('true', '1', 'yes')
 
     def _do():
         try:
-            updater.update_from_upload(filepath, version_name, skip_backup=skip_backup)
+            updater.update_from_upload(filepath, version_name, skip_backup=skip_backup, auto_restart=auto_restart)
         except Exception as e:
             updater._report('failed', f'更新出错: {e}', 0)
 

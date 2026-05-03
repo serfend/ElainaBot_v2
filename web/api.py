@@ -102,6 +102,7 @@ def get_routes() -> list:
         web.get('/api/update/test-mirrors', _(update_handler.handle_test_mirrors)),
         web.post('/api/update/mirror', _(update_handler.handle_set_custom_mirror)),
         web.post('/api/update/upload', _(update_handler.handle_upload_update)),
+        web.get('/api/update/environment', _(update_handler.handle_detect_environment)),
 
         # ── 重启 ──
         web.post('/api/bot/restart', _(bot_restart.handle_restart)),

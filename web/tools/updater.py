@@ -150,6 +150,36 @@ DEFAULT_SKIP = ['config/', 'data/', 'plugins/', 'modules/', '.git/', '__pycache_
 DEFAULT_WHITELIST = ['plugins/system/']
 
 
+# ==================== 环境检测 ====================
+
+def detect_environment():
+    """检测运行环境, 返回 {docker, writable, warning}"""
+    info = {'docker': False, 'writable': True, 'warnings': []}
+    # Docker 检测
+    if os.path.exists('/.dockerenv'):
+        info['docker'] = True
+    else:
+        try:
+            with open('/proc/1/cgroup', 'r') as f:
+                if 'docker' in f.read() or 'containerd' in f.read():
+                    info['docker'] = True
+        except Exception:
+            pass
+    # 可写性检测
+    try:
+        test_file = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(
+            os.path.abspath(__file__)))), '.write_test')
+        with open(test_file, 'w') as f:
+            f.write('test')
+        os.remove(test_file)
+    except Exception:
+        info['writable'] = False
+        info['warnings'].append('项目目录不可写, 更新将失败')
+    if info['docker']:
+        info['warnings'].append('检测到 Docker 环境, 请确保项目目录已挂载 volume 以持久化更新')
+    return info
+
+
 class FrameworkUpdater:
     def __init__(self, base_dir: str):
         self.base_dir = Path(base_dir)
@@ -441,7 +471,13 @@ class FrameworkUpdater:
 
     # ==================== 更新流程 ====================
 
-    async def update_to_version(self, version, skip_backup=False):
+    async def update_to_version(self, version, skip_backup=False, auto_restart=False):
+        # 更新前环境检查
+        env = detect_environment()
+        if not env['writable']:
+            self._report('failed', '项目目录不可写, 无法更新', 0)
+            return {'success': False, 'message': '项目目录不可写, 无法更新'}
+
         self._report('preparing', f'准备更新到 {version}...', 0)
         zip_file = await self.download_update(version)
         if not zip_file:
@@ -449,29 +485,47 @@ class FrameworkUpdater:
         result = self.apply_update(zip_file, version, skip_backup=skip_backup)
         if result['success']:
             self._save_version(version)
+            result['environment'] = env
+            if auto_restart:
+                self._trigger_restart()
         return result
 
-    async def update_to_latest(self, skip_backup=False):
+    async def update_to_latest(self, skip_backup=False, auto_restart=False):
         check = await self.check_for_updates()
         if check.get('error'):
             return {'success': False, 'message': f"检查失败: {check['error']}"}
         if not check['has_update']:
             return {'success': False, 'message': '已是最新版本'}
-        return await self.update_to_version(check['latest_version'], skip_backup=skip_backup)
+        return await self.update_to_version(check['latest_version'], skip_backup=skip_backup, auto_restart=auto_restart)
 
-    async def force_update(self, skip_backup=False):
+    async def force_update(self, skip_backup=False, auto_restart=False):
         try:
             self._report('checking', '获取最新版本...', 0)
             commits = await self._fetch_api('/commits?per_page=1')
             if not commits or not isinstance(commits, list):
                 return {'success': False, 'message': '无法获取版本信息'}
             latest = commits[0].get('sha', '')[:8]
-            return await self.update_to_version(latest, skip_backup=skip_backup)
+            return await self.update_to_version(latest, skip_backup=skip_backup, auto_restart=auto_restart)
         except Exception as e:
             self._report('failed', f'获取版本失败: {e}', 0)
             return {'success': False, 'message': str(e)}
 
-    def update_from_upload(self, zip_file_path, version_name=None, skip_backup=False):
+    @staticmethod
+    def _trigger_restart():
+        """通用重启: 通过 BotManager 的 restart 循环重启, 兼容 Docker/裸机/任何环境"""
+        try:
+            from core.bot import _bot_manager_ref
+            if _bot_manager_ref:
+                log.info("更新完成, 触发重启...")
+                _bot_manager_ref._restart_requested = True
+                if _bot_manager_ref._stop_event:
+                    _bot_manager_ref._stop_event.set()
+                return
+        except Exception:
+            pass
+        log.warning("无法自动重启, 请手动重启")
+
+    def update_from_upload(self, zip_file_path, version_name=None, skip_backup=False, auto_restart=False):
         """从上传的压缩包更新"""
         try:
             self._report('preparing', '准备从上传的压缩包更新...', 0)
@@ -487,6 +541,8 @@ class FrameworkUpdater:
             result = self.apply_update(zip_file_path, version, skip_backup=skip_backup)
             if result['success']:
                 self._save_version(version)
+                if auto_restart:
+                    self._trigger_restart()
             return result
         except Exception as e:
             self._report('failed', f'更新失败: {e}', 0)

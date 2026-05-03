@@ -58,7 +58,26 @@ if __name__ == "__main__":
 '''
 
 
+def _try_internal_restart():
+    """通用重启: 通过 BotManager 的 while-True 循环实现, 兼容 Docker/裸机"""
+    try:
+        from core.bot import _bot_manager_ref
+        if _bot_manager_ref:
+            _bot_manager_ref._restart_requested = True
+            if _bot_manager_ref._stop_event:
+                _bot_manager_ref._stop_event.set()
+            return True
+    except Exception:
+        pass
+    return False
+
+
 async def handle_restart(request: web.Request):
+    # 优先使用内部重启 (通用, 兼容 Docker)
+    if _try_internal_restart():
+        return web.json_response({'success': True, 'message': '正在重启...'})
+
+    # 回退: 外部脚本重启 (仅裸机)
     main_py = os.path.join(_base_dir, 'main.py')
     if not os.path.exists(main_py):
         return web.json_response({'success': False, 'error': 'main.py 不存在'})

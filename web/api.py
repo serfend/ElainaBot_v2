@@ -145,8 +145,9 @@ def get_routes() -> list:
         web.post('/api/database/sql', _(database_browser.handle_execute_sql)),
         web.post('/api/database/delete', _(database_browser.handle_delete_rows)),
 
-        # ── WebSocket ──
+        # ── WebSocket / SSE ──
         web.get('/ws/panel', panel_ws.handle_ws),
+        web.get('/api/sse/panel', panel_ws.handle_sse),
     ]
 
 
@@ -242,7 +243,7 @@ def _iter_bots(appid_filter=''):
 
 
 _SEND_TYPES = frozenset(('plugin', 'onebot_send'))
-_LOG_SQL = "SELECT * FROM log ORDER BY id DESC LIMIT 50"
+_LOG_SQL = "SELECT * FROM log ORDER BY timestamp DESC, id DESC LIMIT 50"
 
 
 def _query_bot_logs(log_type, appid_filter, post_fn=None):
@@ -259,7 +260,7 @@ def _query_bot_logs(log_type, appid_filter, post_fn=None):
             results.extend(rows)
         except Exception:
             pass
-    results.sort(key=lambda r: r.get('timestamp', ''))
+    results.sort(key=lambda r: (r.get('timestamp', ''), r.get('id', 0)))
     return results[-50:]
 
 

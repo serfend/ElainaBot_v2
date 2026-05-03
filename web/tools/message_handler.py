@@ -71,7 +71,7 @@ def _query_messages(date=None, limit=500, appid_filter='', days=1):
             try:
                 rows = inst.log_service.query(
                     'message',
-                    f"SELECT * FROM log ORDER BY id DESC LIMIT {limit}",
+                    f"SELECT * FROM log ORDER BY timestamp DESC, id DESC LIMIT {limit}",
                     date=d,
                 )
                 for r in rows:
@@ -82,7 +82,7 @@ def _query_messages(date=None, limit=500, appid_filter='', days=1):
                 results.extend(rows)
             except Exception:
                 pass
-    results.sort(key=lambda r: (r.get('_date', ''), r.get('id', 0)))
+    results.sort(key=lambda r: (r.get('timestamp', ''), r.get('id', 0)))
     return results
 
 

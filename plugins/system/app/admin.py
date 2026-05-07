@@ -150,7 +150,7 @@ def _check_restart_status():
 
         # 发送重启完成消息 (通过底层 API)
         try:
-            from core.bot import _bot_manager_ref
+            from core.bot.manager import _bot_manager_ref
             if _bot_manager_ref:
                 import random
                 bots = list(_bot_manager_ref._bots.values()) if hasattr(_bot_manager_ref, '_bots') else []

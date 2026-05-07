@@ -10,7 +10,7 @@ from core.base.config import cfg
 
 def _get_bot(event):
     """获取当前事件对应的 BotInstance"""
-    from core.bot import _bot_manager_ref
+    from core.bot.manager import _bot_manager_ref
     return _bot_manager_ref.get_bot(event.appid) if _bot_manager_ref else None
 
 
@@ -252,7 +252,7 @@ async def _handle_history_dau(event, bot, date_str):
     except ValueError:
         return await event.reply("❌ 日期格式错误 (MMDD)")
 
-    from core.bot import _bot_manager_ref
+    from core.bot.manager import _bot_manager_ref
     dau_svc = _bot_manager_ref.dau_service if _bot_manager_ref else None
     if not dau_svc:
         return await event.reply("❌ DAU 服务未启动")

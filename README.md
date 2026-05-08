@@ -159,20 +159,29 @@ def _on_load():
 
 直接拉取预构建镜像，无需克隆代码：
 
-**1. 创建目录并下载 compose 文件**
+**方式一：docker run**
+
+```bash
+docker run -d \
+  --name elainabot \
+  -p 5200:5200 \
+  -v ./config:/app/config \
+  -v ./plugins:/app/plugins \
+  -v ./modules:/app/modules \
+  -v ./log:/app/log \
+  --restart unless-stopped \
+  elainabot/elainabot:latest
+```
+
+**方式二：docker compose**
 
 ```bash
 mkdir elainabot && cd elainabot
 curl -O https://raw.githubusercontent.com/ElainaCore/ElainaBot_v2/main/docker-compose.yml
-```
-
-**2. 启动容器**
-
-```bash
 docker compose up -d
 ```
 
-**3. 访问 Web 面板完成配置**
+**访问 Web 面板完成配置**
 
 ```
 http://localhost:5200/web/?token=admin

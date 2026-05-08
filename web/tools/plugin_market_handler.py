@@ -146,7 +146,8 @@ async def handle_market_list(request: web.Request):
     """获取插件市场列表"""
     search = request.query.get('search', '').lower()
     category = request.query.get('category', '')
-    data = await _fetch_plugin_json()
+    force = request.query.get('refresh', '') == '1'
+    data = await _fetch_plugin_json(force=force)
     if data is None:
         return web.json_response({'success': False, 'message': '无法连接插件库, 请检查网络'})
 
@@ -199,6 +200,8 @@ async def handle_market_detail(request: web.Request):
 
 async def handle_market_refresh(request: web.Request):
     """强制刷新插件库缓存"""
+    global _plugin_cache, _plugin_cache_ts
+    _plugin_cache, _plugin_cache_ts = None, 0
     data = await _fetch_plugin_json(force=True)
     if data is None:
         return web.json_response({'success': False, 'message': '刷新失败, 无法连接插件库'})

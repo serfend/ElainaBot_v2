@@ -35,6 +35,7 @@ def get_routes() -> list:
         # ── 鉴权 ──
         web.post('/api/auth/login', handle_login),
         web.get('/api/auth/check', _(handle_auth_check)),
+        web.get('/api/auth/password-status', _(handle_password_status)),
 
         # ── 机器人 ──
         web.get('/api/bots', _(handle_get_bots)),
@@ -209,6 +210,14 @@ async def handle_login(request: web.Request):
 
 async def handle_auth_check(request: web.Request):
     return web.json_response({'success': True})
+
+
+_WEAK_PASSWORDS = frozenset({'admin', '123456', 'password', 'admin123', '12345678'})
+
+async def handle_password_status(request: web.Request):
+    from core.base.config import cfg
+    pwd = cfg.get('settings', 'web.admin_password', '')
+    return web.json_response({'success': True, 'is_default': pwd in _WEAK_PASSWORDS or not pwd})
 
 
 async def handle_get_bots(request: web.Request):

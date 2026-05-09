@@ -155,44 +155,39 @@ def _on_load():
 - [Docker](https://docs.docker.com/get-docker/) 20.10+
 - [Docker Compose](https://docs.docker.com/compose/install/) v2+
 
-### 快速启动
+### 快速启动（推荐）
 
-**1. 克隆仓库**
+直接拉取预构建镜像，无需克隆代码：
 
-```bash
-git clone https://github.com/ElainaCore/ElainaBot_v2.git
-cd ElainaBot_v2
-```
-
-**2. 构建并启动**
+**方式一：docker run**
 
 ```bash
-docker compose up -d --build
+docker run -d \
+  --name elainabot \
+  -p 5200:5200 \
+  -v ./config:/app/config \
+  -v ./plugins:/app/plugins \
+  -v ./modules:/app/modules \
+  -v ./log:/app/log \
+  --restart unless-stopped \
+  elainabot/elainabot:latest
 ```
 
-**3. 访问 Web 面板完成配置**
+**方式二：docker compose**
+
+```bash
+mkdir elainabot && cd elainabot
+curl -O https://raw.githubusercontent.com/ElainaCore/ElainaBot_v2/main/docker-compose.yml
+docker compose up -d
+```
+
+**访问 Web 面板完成配置**
 
 ```
 http://localhost:5200/web/?token=admin
 ```
 
 在面板中填写机器人的 `APPID` 和 `Secret` 后即可正常运行。
-
-### 常用命令
-
-```bash
-# 查看实时日志
-docker compose logs -f
-
-# 停止
-docker compose down
-
-# 重启
-docker compose restart
-
-# 更新代码后重新构建
-docker compose up -d --build
-```
 
 ### 数据持久化说明
 
@@ -204,6 +199,16 @@ docker compose up -d --build
 | `./plugins/` | 已安装的插件 |
 | `./modules/` | 模块文件 |
 | `./log/` | 运行日志 |
+
+### 自行构建（可选）
+
+如需从源码构建：
+
+```bash
+git clone https://github.com/ElainaCore/ElainaBot_v2.git
+cd ElainaBot_v2
+docker compose -f docker-compose.build.yml up -d --build
+```
 
 ---
 

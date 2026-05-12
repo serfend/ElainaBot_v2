@@ -462,8 +462,8 @@ class PluginManager:
             except Exception as e:
                 report_error(PLUGIN, ic.get('_plugin', '?'), e)
 
-        # 匹配处理器 (支持 / 前缀自动去除)
-        contents_to_try = (content[1:], content) if content[:1] == '/' and len(content) > 1 else (content,)
+        # 匹配处理器 (原文优先, 再试加/去 / 的版本)
+        contents_to_try = (content, content[1:]) if content[:1] == '/' else (content, '/' + content)
 
         for try_content in contents_to_try:
             for h in self._all_handlers:

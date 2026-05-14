@@ -217,6 +217,32 @@ def _migrate_missing_columns(conn, log_type):
             log.warning(f"自动迁移列 {col_name} 失败: {e}")
 
 
+# 表索引 (类型 -> [CREATE INDEX SQL]) — 显著加速 Web 面板的聊天列表/历史查询
+_INDEXES = {
+    'message': [
+        "CREATE INDEX IF NOT EXISTS idx_msg_group_id ON log(group_id)",
+        "CREATE INDEX IF NOT EXISTS idx_msg_user_id ON log(user_id)",
+    ],
+    'lifecycle': [
+        "CREATE INDEX IF NOT EXISTS idx_lc_user_id ON log(user_id)",
+        "CREATE INDEX IF NOT EXISTS idx_lc_group_id ON log(group_id)",
+    ],
+}
+
+
+def _ensure_indexes(conn, log_type):
+    """为日志表创建必要索引 (幂等)"""
+    for sql in _INDEXES.get(log_type, ()):
+        try:
+            conn.execute(sql)
+        except Exception as e:
+            log.warning(f"创建索引失败 ({log_type}): {e}")
+    try:
+        conn.commit()
+    except Exception:
+        pass
+
+
 class _BaseLogService:
     """日志服务公共基类 — 连接管理、查询、批量写入、定时刷写/清理"""
 
@@ -258,6 +284,7 @@ class _BaseLogService:
                     conn.execute(schema)
                     conn.commit()
                 _migrate_missing_columns(conn, log_type)
+                _ensure_indexes(conn, log_type)
             self._initialized.add(db_path)
         self._conns[db_path] = conn
         self._conn_locks.setdefault(db_path, threading.Lock())

@@ -87,6 +87,7 @@ def get_routes() -> list:
         web.post('/api/message/send', _(message_handler.handle_send_message)),
         web.post('/api/message/nickname', _(message_handler.handle_get_nickname)),
         web.post('/api/message/nicknames', _(message_handler.handle_get_nicknames_batch)),
+        web.post('/api/message/recall', _(message_handler.handle_recall_message)),
 
         # ── 统计 ──
         web.get('/api/statistics', _(statistics_handler.handle_get_statistics)),

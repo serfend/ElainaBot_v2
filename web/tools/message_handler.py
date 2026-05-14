@@ -4,16 +4,20 @@ import json
 import time
 import asyncio
 import random
+import base64
 from datetime import datetime, timedelta, date as _date
 
 from aiohttp import web
-import base64
 from core.base.logger import report_error, report_error_raw, FRAMEWORK
 
 _nickname_cache = {}
 _CACHE_TIMEOUT = 86400
 _base_dir = ''
 _bot_manager = None
+
+# 聊天列表短期缓存 (避免多次刷新同一详情重复诡汇总查询)
+_chat_list_cache = {}  # {(chat_type, appid_filter): (timestamp, chats)}
+_CHAT_LIST_TTL = 5  # 秒
 
 
 def set_context(base_dir: str, bot_manager=None):
@@ -43,6 +47,45 @@ def _get_nickname(user_id):
     return f"用户{user_id[-6:]}"
 
 
+def _batch_get_nicknames(user_ids):
+    """批量查询昵称 — 每个 bot 最多一次 SQL, 避免 N+1"""
+    if not user_ids:
+        return {}
+    now = time.time()
+    out = {}
+    pending = []
+    for uid in user_ids:
+        if not uid:
+            continue
+        c = _nickname_cache.get(uid)
+        if c and now - c['ts'] < _CACHE_TIMEOUT:
+            out[uid] = c['name']
+        else:
+            pending.append(uid)
+    if pending and _bot_manager:
+        # SQLite 占位符限制, 分批 (1万/次 足够)
+        for chunk_start in range(0, len(pending), 500):
+            chunk = pending[chunk_start:chunk_start + 500]
+            placeholders = ','.join('?' * len(chunk))
+            sql = f"SELECT user_id, name FROM users WHERE user_id IN ({placeholders})"
+            for inst in _bot_manager._bots.values():
+                try:
+                    rows = inst.log_service.query_data(sql, tuple(chunk))
+                    for r in rows:
+                        uid = r.get('user_id')
+                        nm = r.get('name')
+                        if uid and nm and uid not in out:
+                            out[uid] = nm
+                            _nickname_cache[uid] = {'name': nm, 'ts': now}
+                except Exception:
+                    pass
+    # fallback for missing
+    for uid in user_ids:
+        if uid and uid not in out:
+            out[uid] = f"用户{uid[-6:]}"
+    return out
+
+
 def _iter_bots(appid_filter=''):
     """按 appid 过滤机器人迭代器; 空字符串=全部"""
     if not _bot_manager:
@@ -52,28 +95,41 @@ def _iter_bots(appid_filter=''):
     return list(_bot_manager._bots.items())
 
 
+def _get_bot(appid=''):
+    """按 appid 获取单个 bot 实例, 找不到返回 None"""
+    if not _bot_manager or not _bot_manager._bots:
+        return None
+    if appid and appid in _bot_manager._bots:
+        return _bot_manager._bots[appid]
+    return next(iter(_bot_manager._bots.values()))
+
+
 def _recent_dates(days=1):
     """返回最近 N 天的日期字符串列表 (含今天)"""
     today = _date.today()
     return [(today - timedelta(days=i)).strftime('%Y-%m-%d') for i in range(days)]
 
 
-def _query_messages(date=None, limit=500, appid_filter='', days=1):
-    """从机器人的 SQLite 查询消息, 支持多天查询"""
+def _query_chat_messages_sync(chat_type, chat_id, appid_filter, days=3, limit=300):
+    """查某个聊天会话的最近消息 — SQL WHERE 下推, 走索引, 避免全表扶描+Python过滤"""
     if not _bot_manager:
         return []
-    dates = [date] if date else _recent_dates(days)
+    dates = _recent_dates(days)
     results = []
+    if chat_type == 'group':
+        where = "group_id = ?"
+        params = (chat_id,)
+    else:
+        # 私聊: user_id 匹配 且 group_id 为空或 'c2c'
+        where = "user_id = ? AND (group_id = '' OR group_id = 'c2c')"
+        params = (chat_id,)
+    sql = f"SELECT * FROM log WHERE {where} ORDER BY id DESC LIMIT {limit}"
     for appid, inst in _iter_bots(appid_filter):
         bot_qq = getattr(inst, 'robot_qq', '') or ''
         bot_name = getattr(inst, 'name', appid)
         for d in dates:
             try:
-                rows = inst.log_service.query(
-                    'message',
-                    f"SELECT * FROM log ORDER BY timestamp DESC, id DESC LIMIT {limit}",
-                    date=d,
-                )
+                rows = inst.log_service.query('message', sql, params, date=d)
                 for r in rows:
                     r['appid'] = appid
                     r['bot_name'] = bot_name
@@ -82,8 +138,85 @@ def _query_messages(date=None, limit=500, appid_filter='', days=1):
                 results.extend(rows)
             except Exception:
                 pass
-    results.sort(key=lambda r: (r.get('timestamp', ''), r.get('id', 0)))
-    return results
+    results.sort(key=lambda r: (r.get('_date', ''), r.get('id', 0)))
+    return results[-limit:]
+
+
+def _aggregate_chats_sync(chat_type, appid_filter, days=3):
+    """SQL 聚合聊天列表 — 避免下载几千条诡代反检柒"""
+    if not _bot_manager:
+        return []
+    dates = _recent_dates(days)
+    if chat_type == 'group':
+        # 按 group_id 聚合 — 需要 idx_msg_group_id 索引加速
+        agg_sql = (
+            "SELECT group_id AS chat_id, MAX(id) AS last_id, MAX(timestamp) AS last_time, "
+            "COUNT(*) AS msg_count FROM log WHERE group_id != '' AND group_id != 'c2c' "
+            "GROUP BY group_id"
+        )
+    else:
+        agg_sql = (
+            "SELECT user_id AS chat_id, MAX(id) AS last_id, MAX(timestamp) AS last_time, "
+            "COUNT(*) AS msg_count FROM log WHERE user_id != '' AND (group_id = '' OR group_id = 'c2c') "
+            "GROUP BY user_id"
+        )
+    # 汇总: chat_key -> {appid, last_id, last_time, msg_count}
+    merged = {}
+    for appid, inst in _iter_bots(appid_filter):
+        bot_name = getattr(inst, 'name', appid)
+        for d in dates:
+            try:
+                rows = inst.log_service.query('message', agg_sql, date=d)
+                for r in rows:
+                    cid = r.get('chat_id', '')
+                    if not cid:
+                        continue
+                    key = (appid, cid)
+                    item = merged.get(key)
+                    if not item:
+                        item = {'chat_id': cid, 'appid': appid, 'bot_name': bot_name,
+                                'last_id': 0, 'last_time': '', 'last_date': '',
+                                'msg_count': 0}
+                        merged[key] = item
+                    item['msg_count'] += r.get('msg_count', 0) or 0
+                    rid = r.get('last_id', 0) or 0
+                    rts = r.get('last_time', '') or ''
+                    # 在同 bot+chat 下, 选靠近的那一天作为预览来源
+                    if rid and (rid > item['last_id'] or d > item['last_date']):
+                        item['last_id'] = rid
+                        item['last_time'] = rts
+                        item['last_date'] = d
+            except Exception:
+                pass
+    if not merged:
+        return []
+    # 拉取每个聊天的最后一条 content (仅 last_date 那天 + last_id)
+    # 按 (appid, date) 分组 — 然后多个 id IN (...) 一次查
+    by_path = {}  # (appid, date) -> [last_id]
+    for (appid, _cid), item in merged.items():
+        if item['last_id']:
+            by_path.setdefault((appid, item['last_date']), []).append(item['last_id'])
+    id_to_content = {}  # (appid, id) -> content
+    for (appid, d), ids in by_path.items():
+        inst = _bot_manager._bots.get(appid)
+        if not inst or not ids:
+            continue
+        for chunk_start in range(0, len(ids), 500):
+            chunk = ids[chunk_start:chunk_start + 500]
+            placeholders = ','.join('?' * len(chunk))
+            sql = f"SELECT id, content FROM log WHERE id IN ({placeholders})"
+            try:
+                rows = inst.log_service.query('message', sql, tuple(chunk), date=d)
+                for r in rows:
+                    id_to_content[(appid, r.get('id'))] = r.get('content', '')
+            except Exception:
+                pass
+    chats = []
+    for (appid, cid), item in merged.items():
+        item['last_content'] = id_to_content.get((appid, item['last_id']), '')
+        chats.append(item)
+    chats.sort(key=lambda c: c.get('last_time', ''), reverse=True)
+    return chats
 
 
 async def handle_get_nickname(request: web.Request):
@@ -104,54 +237,40 @@ async def handle_get_nicknames_batch(request: web.Request):
 
 
 async def handle_get_chats(request: web.Request):
-    """获取聊天列表 — 从 SQLite 消息日志汇总, 支持翻页 (每页50)"""
+    """获取聊天列表 — SQL GROUP BY 聚合 + 批量昵称 + 短期缓存"""
     try:
         body = await request.json()
     except Exception:
         body = {}
     chat_type = body.get('type', 'group')
     search = body.get('search', '').lower()
-    date = body.get('date')  # 可选, 默认查3天
     appid_filter = body.get('appid', '')
     page = max(int(body.get('page', 1)), 1)
     page_size = min(int(body.get('page_size', 50)), 100)
 
-    loop = asyncio.get_event_loop()
-    rows = await loop.run_in_executor(None, _query_messages, date, 5000, appid_filter, 3)
-
-    chats_map = {}
-    for r in rows:
-        uid = r.get('user_id', '')
-        gid = r.get('group_id', '')
-        ts = r.get('timestamp', '')
-        content = r.get('content', '')
-
-        if chat_type == 'group' and gid:
-            key = gid
-        elif chat_type == 'user' and uid and not gid:
-            key = uid
+    cache_key = (chat_type, appid_filter)
+    now = time.time()
+    cached = _chat_list_cache.get(cache_key)
+    if cached and now - cached[0] < _CHAT_LIST_TTL:
+        chats = cached[1]
+    else:
+        loop = asyncio.get_event_loop()
+        chats = await loop.run_in_executor(None, _aggregate_chats_sync, chat_type, appid_filter, 3)
+        # 批量填昵称 (仅私聊)
+        if chat_type == 'user':
+            ids = [c['chat_id'] for c in chats]
+            nicks = await loop.run_in_executor(None, _batch_get_nicknames, ids)
+            for c in chats:
+                c['nickname'] = nicks.get(c['chat_id'], f"用户{c['chat_id'][-6:]}")
+                c['avatar'] = (c['nickname'] or '?')[0].upper()
         else:
-            continue
+            for c in chats:
+                c['nickname'] = f"群{c['chat_id'][-6:]}"
+                c['avatar'] = c['chat_id'][0].upper() if c['chat_id'] else '?'
+        _chat_list_cache[cache_key] = (now, chats)
 
-        if key not in chats_map:
-            nick = f'群{key[-6:]}' if chat_type == 'group' else _get_nickname(key)
-            chats_map[key] = {
-                'chat_id': key,
-                'appid': r.get('appid', ''),
-                'bot_name': r.get('bot_name', ''),
-                'nickname': nick,
-                'avatar': key[0].upper() if key else '?',
-                'last_time': ts,
-                'last_content': content,
-                'msg_count': 0,
-            }
-        chats_map[key]['last_time'] = ts
-        chats_map[key]['last_content'] = content
-        chats_map[key]['msg_count'] += 1
-
-    chats = sorted(chats_map.values(), key=lambda c: c['last_time'], reverse=True)
     if search:
-        chats = [c for c in chats if search in c['chat_id'].lower() or search in c['nickname'].lower()]
+        chats = [c for c in chats if search in c['chat_id'].lower() or search in c.get('nickname', '').lower()]
 
     total = len(chats)
     start = (page - 1) * page_size
@@ -163,36 +282,36 @@ async def handle_get_chats(request: web.Request):
 
 
 async def handle_get_chat_history(request: web.Request):
-    """获取聊天记录 — 从 SQLite 消息日志过滤"""
+    """获取聊天记录 — SQL WHERE 下推 + 批量昵称"""
     try:
         body = await request.json()
     except Exception:
         body = {}
     chat_type = body.get('chat_type', 'group')
     chat_id = body.get('chat_id', '')
-    date = body.get('date')
     appid_filter = body.get('appid', '')
 
     if not chat_id:
         return web.json_response({'success': True, 'data': {'messages': []}})
 
     loop = asyncio.get_event_loop()
-    rows = await loop.run_in_executor(None, _query_messages, date, 5000, appid_filter, 3)
+    rows = await loop.run_in_executor(
+        None, _query_chat_messages_sync, chat_type, chat_id, appid_filter, 3, 300)
+
+    # 收集需要查询的 user_id (仅非bot消息), 批量取昵称
+    uid_set = set()
+    for r in rows:
+        if r.get('direction') != 'send':
+            uid = r.get('user_id', '')
+            if uid:
+                uid_set.add(uid)
+    nicks = await loop.run_in_executor(None, _batch_get_nicknames, list(uid_set)) if uid_set else {}
 
     messages = []
     for r in rows:
         uid = r.get('user_id', '')
-        gid = r.get('group_id', '')
         content = r.get('content', '')
         msg_type = r.get('type', '')
-
-        # 匹配聊天会话
-        if chat_type == 'group':
-            if gid != chat_id:
-                continue
-        elif uid != chat_id or gid:
-            continue
-
         is_bot = r.get('direction') == 'send'
 
         # 清理旧的 [Bot:xxx] 前缀
@@ -202,36 +321,34 @@ async def handle_get_chat_history(request: web.Request):
                 content = content[idx + 2:]
 
         plugin_name = r.get('plugin_name', '')
-        source = 'web_panel' if plugin_name == 'WebPanel' else ('onebot' if msg_type in ('onebot_send', 'onebot_recv') else '')
+        source = 'web_panel' if plugin_name == 'WebPanel' else (
+            'onebot' if msg_type in ('onebot_send', 'onebot_recv') else '')
         messages.append({
             'id': r.get('id', len(messages)),
+            'message_id': r.get('message_id', ''),
             'user_id': uid,
             'appid': r.get('appid', ''),
             'bot_qq': r.get('bot_qq', '') if is_bot else '',
-            'nickname': (r.get('bot_name', '') or 'Bot') if is_bot else _get_nickname(uid),
+            'nickname': (r.get('bot_name', '') or 'Bot') if is_bot else nicks.get(uid, f"用户{uid[-6:]}" if uid else '未知用户'),
             'content': content,
             'timestamp': r.get('timestamp', ''),
             'is_self': is_bot,
             'source': source,
         })
 
-    # 取最近一条非 bot 消息的 message_id 用于发送回复 (仅当天, 避免过期)
+    # 取最近一条非 bot 消息的 message_id 用于发送回复 (仅当天)
     last_msg_id = ''
     today_str = _date.today().strftime('%Y-%m-%d')
     for r in reversed(rows):
         if r.get('_date', '') != today_str:
             continue
         mid = r.get('message_id', '')
-        if mid and r.get('type') != 'plugin':
-            uid = r.get('user_id', '')
-            gid = r.get('group_id', '')
-            if (chat_type == 'group' and gid == chat_id) or \
-               (chat_type == 'user' and uid == chat_id and not gid):
-                last_msg_id = mid
-                break
+        if mid and r.get('type') != 'plugin' and r.get('direction') != 'send':
+            last_msg_id = mid
+            break
 
     return web.json_response({'success': True, 'data': {
-        'messages': messages[-300:], 'last_msg_id': last_msg_id,
+        'messages': messages, 'last_msg_id': last_msg_id,
     }})
 
 
@@ -285,12 +402,7 @@ async def handle_send_message(request: web.Request):
         if not content and not image_data and msg_type != 'ark':
             return web.json_response({'success': False, 'message': '消息内容为空'}, status=400)
 
-        # 找到对应 bot
-        bot = None
-        if appid and appid in _bot_manager._bots:
-            bot = _bot_manager._bots[appid]
-        elif _bot_manager._bots:
-            bot = next(iter(_bot_manager._bots.values()))
+        bot = _get_bot(appid)
         if not bot:
             return web.json_response({'success': False, 'message': '无可用机器人'}, status=400)
 
@@ -346,6 +458,42 @@ async def handle_send_message(request: web.Request):
         import traceback
         traceback.print_exc()
         return web.json_response({'success': False, 'message': str(e)}, status=500)
+
+
+async def handle_recall_message(request: web.Request):
+    """撤回消息 — 仅 2 分钟内由 web 面板发出 (is_self) 的消息可撤回
+
+    参数: chat_type, chat_id, appid, message_id
+    """
+    if not _bot_manager:
+        return web.json_response({'success': False, 'message': '机器人管理器未初始化'}, status=500)
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    chat_type = body.get('chat_type', '')
+    chat_id = body.get('chat_id', '')
+    appid = body.get('appid', '')
+    message_id = body.get('message_id', '')
+
+    if not message_id or not chat_id or chat_type not in ('group', 'user'):
+        return web.json_response({'success': False, 'message': '参数缺失'}, status=400)
+
+    bot = _get_bot(appid)
+    if not bot:
+        return web.json_response({'success': False, 'message': '无可用机器人'}, status=400)
+
+    endpoint = f"/v2/{'groups' if chat_type == 'group' else 'users'}/{chat_id}/messages/{message_id}"
+
+    try:
+        ok, data = await bot.sender.delete(endpoint)
+    except Exception as e:
+        return web.json_response({'success': False, 'message': str(e)}, status=500)
+
+    if ok:
+        return web.json_response({'success': True})
+    err = data.get('message', '撤回失败') if isinstance(data, dict) else str(data)
+    return web.json_response({'success': False, 'message': err})
 
 
 # ==================== 日志记录 ====================
@@ -509,6 +657,5 @@ async def _send_ark(sender, template_id, kv_json_str, *, group_id=None, user_id=
     if msg_id:
         payload['msg_id'] = msg_id
 
-    if group_id:
-        return await sender.post_json(f"/v2/groups/{group_id}/messages", payload)
-    return await sender.post_json(f"/v2/users/{user_id}/messages", payload)
+    _, send_ep = _media_endpoints(group_id, user_id)
+    return await sender.post_json(send_ep, payload)

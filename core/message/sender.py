@@ -222,9 +222,24 @@ class MessageSender:
                                      msg_id=msg_id, event_id=event_id, **kwargs)
 
     async def _send_push(self, endpoint, content, buttons, media, msg_type, **kwargs):
-        payload = self._build_push_payload(content, buttons, media, msg_type, **kwargs)
+        payload = self._build_core_payload(content, buttons, media, msg_type, **kwargs)
         ok, data = await self.post_json(endpoint, payload)
+        if ok:
+            self._log_push(endpoint, payload, content)
         return ok, data, payload
+
+    def _log_push(self, endpoint, payload, content):
+        """主动推送成功后的日志记录"""
+        parts = endpoint.strip('/').split('/')
+        group_id = user_id = ''
+        if len(parts) >= 3:
+            if parts[1] == 'groups':
+                group_id = parts[2]
+            elif parts[1] == 'users':
+                user_id = parts[2]
+        text = self._extract_log_text(payload, content)
+        raw_msg = json.dumps(payload, ensure_ascii=False, default=str)
+        self._emit_log(text, user_id, group_id, raw_msg, 'proactive')
 
     async def send_to_channel(self, channel_id, content=None, *, msg_id=None,
                               buttons=None, **kwargs):
@@ -343,8 +358,48 @@ class MessageSender:
                 payload['prompt_keyboard'] = pk
         return payload
 
-    def _build_push_payload(self, content, buttons, media, msg_type, **kwargs):
-        return self._build_core_payload(content, buttons, media, msg_type, **kwargs)
+    def _extract_log_text(self, payload, content, media_label=''):
+        """从 payload 提取日志显示文本"""
+        md = payload.get('markdown')
+        text = (md.get('content', '') if md else None) or content or payload.get('content', '') or ''
+        if payload.get('msg_type') == MSG_TYPE_MEDIA:
+            label = media_label or '[media]'
+            text = f'{label} {text}'.rstrip() if text else label
+        kb = payload.get('keyboard')
+        if kb:
+            try:
+                rows = kb.get('content', {}).get('rows', [])
+                labels = [b.get('render_data', {}).get('label', '?') for r in rows for b in r.get('buttons', [])]
+                text += '\n[keyboard] ' + ' | '.join(labels)
+            except Exception:
+                pass
+        return text
+
+    def _emit_log(self, text, user_id, group_id, raw_msg, log_type='proactive', plugin_name=''):
+        """推送到 Web 面板 + 持久化到数据库"""
+        if self._web_log_cb:
+            try:
+                self._web_log_cb('message', {
+                    'appid': self._appid,
+                    'bot_name': self._bot_name or self._appid,
+                    'bot_qq': self._bot_qq or '',
+                    'user_id': user_id, 'group_id': group_id,
+                    'content': text, 'is_bot': True,
+                    'direction': 'send',
+                    'plugin_name': plugin_name or log_type,
+                })
+            except Exception:
+                pass
+        if self._log_service:
+            try:
+                asyncio.ensure_future(self._log_service.add('message', {
+                    'type': log_type,
+                    'user_id': user_id, 'group_id': group_id,
+                    'content': text, 'raw_message': raw_msg, 'direction': 'send',
+                    'plugin_name': plugin_name or log_type,
+                }))
+            except Exception:
+                pass
 
     def _build_core_payload(self, content, buttons, media, msg_type, **kwargs):
         """统一载荷构建 (回复/推送共用)"""
@@ -528,54 +583,19 @@ class MessageSender:
 
     def _log_sent(self, payload, event, content, media_label=''):
         """发送成功后的日志记录 (Web面板 + 持久化)"""
-        # per-event 上下文 (线程安全) > sender 共享状态 (兼容)
         reply_log_cb = getattr(event, '_reply_log_cb', None) or self._reply_log_cb
         plugin_name = getattr(event, '_reply_plugin_name', '') or self._reply_plugin_name
-        # 拼装日志文本
-        md = payload.get('markdown')
-        text = (md.get('content', '') if md else None) or content or payload.get('content', '') or ''
-        if payload.get('msg_type') == MSG_TYPE_MEDIA:
-            label = media_label or '[media]'
-            text = f'{label} {text}'.rstrip() if text else label
-        kb = payload.get('keyboard')
-        if kb:
-            try:
-                rows = kb.get('content', {}).get('rows', [])
-                labels = [b.get('render_data', {}).get('label', '?') for r in rows for b in r.get('buttons', [])]
-                text += '\n[keyboard] ' + ' | '.join(labels)
-            except Exception:
-                pass
+        text = self._extract_log_text(payload, content, media_label)
         user_id = getattr(event, 'user_id', '') or ''
         group_id = getattr(event, 'group_id', '') or ''
-        if self._web_log_cb:
-            try:
-                self._web_log_cb('message', {
-                    'appid': self._appid,
-                    'bot_name': self._bot_name or self._appid,
-                    'bot_qq': self._bot_qq or '',
-                    'user_id': user_id, 'group_id': group_id,
-                    'content': text, 'is_bot': True,
-                    'direction': 'send',
-                    'plugin_name': plugin_name or '',
-                })
-            except Exception:
-                pass
         raw_msg = json.dumps(payload, ensure_ascii=False, default=str)
         if reply_log_cb:
             try:
                 reply_log_cb(text, user_id, group_id, raw_msg)
             except Exception:
                 pass
-        elif self._log_service:
-            try:
-                asyncio.ensure_future(self._log_service.add('message', {
-                    'type': 'template',
-                    'user_id': user_id, 'group_id': group_id,
-                    'content': text, 'raw_message': raw_msg, 'direction': 'send',
-                    'plugin_name': plugin_name or 'framework',
-                }))
-            except Exception:
-                pass
+        else:
+            self._emit_log(text, user_id, group_id, raw_msg, 'template', plugin_name or 'framework')
 
     async def _auto_recall(self, event, message_id, delay):
         try:

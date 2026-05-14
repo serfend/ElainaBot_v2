@@ -54,7 +54,8 @@ class WSClient:
             try:
                 url = await self._get_gateway_url()
                 log.info(f"[{self._appid}] 正在连接 WebSocket: {url}")
-                _ssl = None
+                import ssl as _ssl_mod
+                _ssl = _ssl_mod.create_default_context() if url.startswith('wss://') else None
                 async with websockets.connect(url, ssl=_ssl) as ws:
                     self._ws = ws
                     self._reconnect_count = 0

@@ -14,6 +14,7 @@ from core.message.event import (
     GROUP_MESSAGE_CREATE,
     MESSAGE_TYPES, LIFECYCLE_TYPES, INTERACTION_CREATE,
     MESSAGE_AUDIT_PASS, MESSAGE_AUDIT_REJECT,
+    REACTION_TYPES,
 )
 from core.message.parsers import swap_ids
 
@@ -105,6 +106,20 @@ class EventHandlerMixin:
             await self._handle_audit(bot, event, et)
             return
 
+        # 表态事件 → 记录日志 + 推送web面板事件日志，不分发插件
+        if et in REACTION_TYPES:
+            raw_json = json.dumps(event.raw, ensure_ascii=False)
+            bot.log_service.add_sync('event', {
+                'type': et, 'appid': appid,
+                'raw_message': raw_json,
+            })
+            self._push_web_log('event', {
+                'appid': appid, 'event_type': et,
+                'content': raw_json,
+                'bot_name': bot.name,
+            })
+            return
+
         # 未预设事件 → 记录到错误日志
         if et not in MESSAGE_TYPES and et not in LIFECYCLE_TYPES and et != INTERACTION_CREATE:
             raw_json = json.dumps(event.raw, ensure_ascii=False)
@@ -138,6 +153,10 @@ class EventHandlerMixin:
         # 全量群记录
         if et == GROUP_MESSAGE_CREATE and event.group_id:
             self._record_full_access_group(bot, event.group_id)
+
+        # 全量群 @全体成员 → 跳过插件处理 (含同时 @机器人, 防止双机器人轮回)
+        if et == GROUP_MESSAGE_CREATE and event.is_at_all:
+            return
 
         # 插件分发
         if not self._plugin_manager:

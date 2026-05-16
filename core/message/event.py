@@ -33,6 +33,10 @@ GROUP_DEL_ROBOT = 'GROUP_DEL_ROBOT'
 GROUP_MSG_REJECT = 'GROUP_MSG_REJECT'
 GROUP_MSG_RECEIVE = 'GROUP_MSG_RECEIVE'
 
+# 表态
+MESSAGE_REACTION_ADD = 'MESSAGE_REACTION_ADD'
+MESSAGE_REACTION_REMOVE = 'MESSAGE_REACTION_REMOVE'
+
 # 频道
 AT_MESSAGE_CREATE = 'AT_MESSAGE_CREATE'
 DIRECT_MESSAGE_CREATE = 'DIRECT_MESSAGE_CREATE'
@@ -53,6 +57,7 @@ LIFECYCLE_TYPES = frozenset({
     GROUP_ADD_ROBOT, GROUP_DEL_ROBOT,
     GROUP_MSG_REJECT, GROUP_MSG_RECEIVE,
 })
+REACTION_TYPES = frozenset({MESSAGE_REACTION_ADD, MESSAGE_REACTION_REMOVE})
 
 # 需要 msg_id / event_id 回复的事件
 _MSG_ID_TYPES = frozenset({
@@ -109,7 +114,7 @@ class Event:
         'is_group', 'is_direct', 'is_channel', 'is_interaction', 'is_lifecycle',
         'interaction_data', 'chat_type_code', 'scene', 'scene_source',
         'sharer_id', 'scene_param',
-        'mentions', 'is_at_self', 'is_at_other_bot',
+        'mentions', 'is_at_self', 'is_at_other_bot', 'is_at_all',
         '_sender', '_reply_log_cb', '_reply_plugin_name',
     )
 
@@ -151,6 +156,7 @@ class Event:
         self.mentions = []
         self.is_at_self = False
         self.is_at_other_bot = False
+        self.is_at_all = False
         self._sender = None
         self._reply_log_cb = None
         self._reply_plugin_name = ''

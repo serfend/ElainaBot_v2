@@ -92,6 +92,10 @@ def parse_group_message(event, d):
             isinstance(m, dict) and m.get('bot') is True and m.get('is_you') is not True
             for m in mentions
         )
+        event.is_at_all = any(
+            isinstance(m, dict) and m.get('scope') == 'all'
+            for m in mentions
+        )
 
 
 def parse_direct_message(event, d):

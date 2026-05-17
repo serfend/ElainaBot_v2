@@ -28,6 +28,10 @@ Thumbs.db
 /data/web/
 /data/session/
 
+# --- Project: Module-local Runtime Data ---
+modules/modules_enabled.json
+modules/onebot_adapter/data/
+
 # --- Project: Backups ---
 *.bak
 *.ban

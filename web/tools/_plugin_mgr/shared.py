@@ -1,54 +1,55 @@
 """共享状态 / 路径校验 / 入口探测"""
 
-import os
 import logging
+import os
 
 from aiohttp import web
 
-log = logging.getLogger('ElainaBot.web.plugin_mgr')
+log = logging.getLogger("ElainaBot.web.plugin_mgr")
 
 # ==================== 全局状态 (由 plugin_manager.set_context 注入) ====================
 
-_state = {'base_dir': '', 'bot_manager': None}
+_state = {"base_dir": "", "bot_manager": None}
 
 
 def set_context(base_dir: str, bot_manager=None):
-    _state['base_dir'] = base_dir
+    _state["base_dir"] = base_dir
     if bot_manager is not None:
-        _state['bot_manager'] = bot_manager
+        _state["bot_manager"] = bot_manager
 
 
 def base_dir() -> str:
-    return _state['base_dir']
+    return _state["base_dir"]
 
 
 def bot_manager():
-    return _state['bot_manager']
+    return _state["bot_manager"]
 
 
 def plugins_dir() -> str:
-    return os.path.join(_state['base_dir'], 'plugins')
+    return os.path.join(_state["base_dir"], "plugins")
 
 
 def modules_dir() -> str:
-    return os.path.join(_state['base_dir'], 'modules')
+    return os.path.join(_state["base_dir"], "modules")
 
 
 def get_pm():
     """获取 PluginManager 实例 (无则返回 None)"""
-    bm = _state['bot_manager']
+    bm = _state["bot_manager"]
     if not bm:
         return None
-    return getattr(bm, '_plugin_manager', None) or getattr(bm, 'plugin_manager', None)
+    return getattr(bm, "_plugin_manager", None) or getattr(bm, "plugin_manager", None)
 
 
 def get_mm():
     """获取 ModuleManager 实例 (无则返回 None)"""
-    bm = _state['bot_manager']
-    return getattr(bm, 'module_manager', None) if bm else None
+    bm = _state["bot_manager"]
+    return getattr(bm, "module_manager", None) if bm else None
 
 
 # ==================== 路径校验 ====================
+
 
 def validate_path(path, base):
     abs_p = os.path.abspath(path)
@@ -60,13 +61,15 @@ def validate_config_path(raw_path):
     abs_path = os.path.abspath(os.path.normpath(raw_path))
     allowed = (os.path.abspath(modules_dir()), os.path.abspath(plugins_dir()))
     if not any(abs_path.startswith(d) for d in allowed):
-        return None, web.json_response({'success': False, 'message': '无效路径'}, status=403)
+        return None, web.json_response(
+            {"success": False, "message": "无效路径"}, status=403
+        )
     return abs_path, None
 
 
 # ==================== 插件入口探测 ====================
 
-ENTRY_CANDIDATES = ('index.py', 'app.py', 'main.py')
+ENTRY_CANDIDATES = ("index.py", "app.py", "main.py")
 
 
 def find_entry(plugin_dir):
@@ -84,7 +87,7 @@ def find_entry_or_ban(plugin_dir):
         path = os.path.join(plugin_dir, name)
         if os.path.isfile(path):
             return path, True
-        ban = path + '.ban'
+        ban = path + ".ban"
         if os.path.isfile(ban):
             return ban, False
     return None, None
@@ -92,23 +95,41 @@ def find_entry_or_ban(plugin_dir):
 
 # ==================== 配置文件格式检测 ====================
 
-CONFIG_EXTS = frozenset({'.yaml', '.yml', '.json', '.toml', '.ini', '.cfg',
-                         '.conf', '.txt', '.md', '.backup'})
+CONFIG_EXTS = frozenset(
+    {
+        ".yaml",
+        ".yml",
+        ".json",
+        ".toml",
+        ".ini",
+        ".cfg",
+        ".conf",
+        ".txt",
+        ".md",
+        ".backup",
+    }
+)
 
 _FORMAT_MAP = {
-    '.yaml': 'yaml', '.yml': 'yaml', '.json': 'json', '.toml': 'toml',
-    '.ini': 'ini', '.cfg': 'ini', '.conf': 'ini',
-    '.txt': 'text', '.log': 'text', '.md': 'text',
+    ".yaml": "yaml",
+    ".yml": "yaml",
+    ".json": "json",
+    ".toml": "toml",
+    ".ini": "ini",
+    ".cfg": "ini",
+    ".conf": "ini",
+    ".txt": "text",
+    ".log": "text",
+    ".md": "text",
 }
 
 
 def detect_config_format(ext):
-    return _FORMAT_MAP.get(ext, 'raw')
+    return _FORMAT_MAP.get(ext, "raw")
 
 
 def list_config_files(data_dir):
     """列出 data/ 下可编辑配置文件 (排除 .db 等)"""
-    from datetime import datetime
     files = []
     if not os.path.isdir(data_dir):
         return files
@@ -119,10 +140,12 @@ def list_config_files(data_dir):
         ext = os.path.splitext(fname)[1].lower()
         if ext not in CONFIG_EXTS:
             continue
-        files.append({
-            'name': fname,
-            'path': fpath.replace('\\', '/'),
-            'format': detect_config_format(ext),
-            'size': os.path.getsize(fpath),
-        })
+        files.append(
+            {
+                "name": fname,
+                "path": fpath.replace("\\", "/"),
+                "format": detect_config_format(ext),
+                "size": os.path.getsize(fpath),
+            }
+        )
     return files

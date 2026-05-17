@@ -13,7 +13,7 @@ from datetime import datetime, timedelta
 
 from aiohttp import web
 
-_COOKIE_SECRET = 'elaina_cookie_secret_key_2024_v1'
+_COOKIE_SECRET = ''
 _BAN_DURATION = 43200
 _SESSION_CLEANUP_INTERVAL = 300
 _IP_CLEANUP_INTERVAL = 3600
@@ -22,6 +22,7 @@ _MAX_SESSIONS = 10
 _MAX_FAIL_COUNT = 5
 _SESSION_DAYS = 7
 _TOKEN_EXPIRY = 86400 * 7
+_MAX_IP_RECORDS = 10000
 
 valid_sessions: dict = {}
 ip_access_data: dict = {}
@@ -30,17 +31,129 @@ _last_ip_cleanup = 0
 _data_dir = ''
 _ip_file = ''
 _session_file = ''
+_secret_file = ''
 _io_lock = threading.Lock()  # 串行化文件写入, 避免内容交错损坏
 
 
 def init(base_dir: str):
-    global _data_dir, _ip_file, _session_file
+    global _data_dir, _ip_file, _session_file, _secret_file, _COOKIE_SECRET
     _data_dir = os.path.join(base_dir, 'data', 'web')
     os.makedirs(_data_dir, exist_ok=True)
     _ip_file = os.path.join(_data_dir, 'ip.json')
     _session_file = os.path.join(_data_dir, 'sessions.json')
+    _secret_file = os.path.join(_data_dir, '.cookie_secret')
+    _COOKIE_SECRET = _load_or_create_secret()
     _load_ip_data()
     _load_session_data()
+    _migrate_password()
+
+
+def _load_or_create_secret() -> str:
+    """从文件加载 cookie secret, 不存在则随机生成并持久化"""
+    if os.path.exists(_secret_file):
+        try:
+            with open(_secret_file, 'r', encoding='utf-8') as f:
+                secret = f.read().strip()
+                if len(secret) >= 32:
+                    return secret
+        except Exception:
+            pass
+    secret = base64.urlsafe_b64encode(os.urandom(48)).decode()
+    try:
+        with open(_secret_file, 'w', encoding='utf-8') as f:
+            f.write(secret)
+    except Exception:
+        pass
+    return secret
+
+
+# ==================== 密码 hash ====================
+
+_PWD_HASH_PREFIX = 'sha256:'
+
+
+def hash_password(plain: str) -> str:
+    """SHA-256 加盐 hash"""
+    salt = os.urandom(16)
+    h = hashlib.sha256(salt + plain.encode('utf-8')).hexdigest()
+    return _PWD_HASH_PREFIX + base64.b64encode(salt).decode() + ':' + h
+
+
+def verify_password(plain: str, stored: str) -> bool:
+    """恒定时间比较, 兼容明文旧密码"""
+    if stored.startswith(_PWD_HASH_PREFIX):
+        try:
+            rest = stored[len(_PWD_HASH_PREFIX):]
+            salt_b64, expected_hex = rest.split(':', 1)
+            salt = base64.b64decode(salt_b64)
+            actual_hex = hashlib.sha256(salt + plain.encode('utf-8')).hexdigest()
+            return hmac.compare_digest(actual_hex, expected_hex)
+        except Exception:
+            return False
+    # 明文回退 (旧配置兼容), 仍用恒定时间比较
+    return hmac.compare_digest(plain, stored)
+
+
+def is_hashed(stored: str) -> bool:
+    return stored.startswith(_PWD_HASH_PREFIX)
+
+
+def _migrate_password():
+    """启动时将明文密码自动迁移为 hash"""
+    try:
+        from core.base.config import cfg
+        pwd = cfg.get('settings', 'web.admin_password', '')
+        if pwd and not is_hashed(pwd):
+            cfg.set_value('settings', 'web.admin_password', hash_password(pwd))
+    except Exception:
+        pass
+
+
+def get_password_hash() -> str:
+    """获取存储的密码 hash 中的 salt:hex 部分 (用于 challenge-response)"""
+    try:
+        from core.base.config import cfg
+        stored = cfg.get('settings', 'web.admin_password', '')
+        if not stored:
+            return ''
+        if stored.startswith(_PWD_HASH_PREFIX):
+            return stored[len(_PWD_HASH_PREFIX):]
+        # 明文未迁移, 即时迁移
+        hashed = hash_password(stored)
+        cfg.set_value('settings', 'web.admin_password', hashed)
+        return hashed[len(_PWD_HASH_PREFIX):]
+    except Exception:
+        pass
+    return ''
+
+
+# ==================== Nonce ====================
+
+_NONCE_EXPIRY = 30  # 秒
+_nonces: dict = {}  # nonce -> expire_time
+
+
+def create_nonce() -> str:
+    """生成一次性 nonce"""
+    _cleanup_nonces()
+    nonce = base64.urlsafe_b64encode(os.urandom(24)).decode().rstrip('=')
+    _nonces[nonce] = time.time() + _NONCE_EXPIRY
+    return nonce
+
+
+def consume_nonce(nonce: str) -> bool:
+    """消费 nonce, 成功返回 True (一次性)"""
+    exp = _nonces.pop(nonce, None)
+    if exp is None:
+        return False
+    return time.time() < exp
+
+
+def _cleanup_nonces():
+    now = time.time()
+    expired = [k for k, v in _nonces.items() if now >= v]
+    for k in expired:
+        del _nonces[k]
 
 
 # ==================== JSON IO ====================
@@ -168,6 +281,13 @@ def cleanup_expired_ip_bans():
                     d['fail_times'] = []
             except Exception:
                 pass
+    # 超限时淘汰最旧的无封禁记录
+    if len(ip_access_data) > _MAX_IP_RECORDS:
+        unbanned = sorted(
+            ((k, v) for k, v in ip_access_data.items() if not v.get('is_banned')),
+            key=lambda x: x[1].get('last_access', ''))
+        for k, _ in unbanned[:len(ip_access_data) - _MAX_IP_RECORDS]:
+            del ip_access_data[k]
     _save_ip_data()
 
 

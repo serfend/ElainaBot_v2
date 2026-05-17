@@ -1,6 +1,7 @@
 """Web 面板 API 路由"""
 
 import asyncio
+import hmac
 import logging
 from datetime import datetime
 
@@ -41,6 +42,7 @@ def get_routes() -> list:
     _ = auth.require_auth  # 简写
     return [
         # ── 鉴权 ──
+        web.get('/api/auth/nonce', handle_nonce),
         web.post('/api/auth/login', handle_login),
         web.get('/api/auth/check', _(handle_auth_check)),
         web.get('/api/auth/password-status', _(handle_password_status)),
@@ -48,7 +50,7 @@ def get_routes() -> list:
         # ── 机器人 ──
         web.get('/api/bots', _(handle_get_bots)),
         web.get('/api/robot/info', _(robot_info.handle_get_robot_info)),
-        web.get('/api/robot/qrcode', robot_info.handle_get_robot_qrcode),
+        web.get('/api/robot/qrcode', _(robot_info.handle_get_robot_qrcode)),
 
         # ── 系统信息 ──
         web.get('/api/system/info', _(system_info.handle_system_info)),
@@ -189,6 +191,19 @@ def set_context(bot_manager, base_dir: str):
 
 # ======================== 内联路由处理 ========================
 
+async def handle_nonce(request: web.Request):
+    """返回一次性 nonce + 密码 salt, 用于 challenge-response 登录"""
+    ip = auth.get_real_ip(request)
+    if auth.is_ip_banned(ip):
+        return web.json_response({'success': False, 'error': 'IP 已被封禁'}, status=403)
+    pwd_hash = auth.get_password_hash()
+    if not pwd_hash:
+        return web.json_response({'success': False, 'error': '未配置管理员密码'}, status=500)
+    salt_b64 = pwd_hash.split(':', 1)[0] if ':' in pwd_hash else ''
+    nonce = auth.create_nonce()
+    return web.json_response({'success': True, 'nonce': nonce, 'salt': salt_b64})
+
+
 async def handle_login(request: web.Request):
     ip = auth.get_real_ip(request)
     auth.cleanup_expired_ip_bans()
@@ -200,13 +215,41 @@ async def handle_login(request: web.Request):
     except Exception:
         return web.json_response({'success': False, 'error': '请求格式错误'}, status=400)
 
+    nonce = body.get('nonce', '')
+    response = body.get('response', '')
+
+    # challenge-response 模式
+    if nonce and response:
+        if not auth.consume_nonce(nonce):
+            return web.json_response({'success': False, 'error': 'nonce 无效或已过期'}, status=400)
+        pwd_hash = auth.get_password_hash()
+        if not pwd_hash:
+            return web.json_response({'success': False, 'error': '未配置管理员密码'}, status=500)
+        # 服务端计算: SHA256(nonce + stored_hex_hash)
+        stored_hex = pwd_hash.split(':', 1)[1] if ':' in pwd_hash else ''
+        import hashlib as _hl
+        expected = _hl.sha256((nonce + stored_hex).encode()).hexdigest()
+        if not hmac.compare_digest(response, expected):
+            auth.record_ip_access(ip, 'fail')
+            remaining = auth.get_remaining_attempts(ip)
+            if remaining <= 0:
+                return web.json_response({
+                    'success': False, 'error': 'IP 已被封禁，12小时后解除'}, status=403)
+            return web.json_response({
+                'success': False, 'error': f'密码错误，还剩 {remaining} 次机会',
+                'remaining': remaining}, status=401)
+        auth.record_ip_access(ip, 'success')
+        token = auth.create_session(request)
+        return web.json_response({'success': True, 'token': token})
+
+    # 兼容旧版明文模式 (本地开发 / HTTPS 环境)
     password = body.get('password', '')
     from core.base.config import cfg
     admin_pwd = cfg.get('settings', 'web.admin_password', '')
     if not admin_pwd:
         return web.json_response({'success': False, 'error': '未配置管理员密码'}, status=500)
 
-    if password != admin_pwd:
+    if not auth.verify_password(password, admin_pwd):
         auth.record_ip_access(ip, 'fail')
         remaining = auth.get_remaining_attempts(ip)
         if remaining <= 0:
@@ -216,9 +259,13 @@ async def handle_login(request: web.Request):
             'success': False, 'error': f'密码错误，还剩 {remaining} 次机会',
             'remaining': remaining}, status=401)
 
+    if not auth.is_hashed(admin_pwd):
+        cfg.set_value('settings', 'web.admin_password', auth.hash_password(password))
+
     auth.record_ip_access(ip, 'success')
     token = auth.create_session(request)
-    return web.json_response({'success': True, 'token': token})
+    is_weak = password in _WEAK_PASSWORDS
+    return web.json_response({'success': True, 'token': token, 'is_weak': is_weak})
 
 
 async def handle_auth_check(request: web.Request):
@@ -230,7 +277,8 @@ _WEAK_PASSWORDS = frozenset({'admin', '123456', 'password', 'admin123', '1234567
 async def handle_password_status(request: web.Request):
     from core.base.config import cfg
     pwd = cfg.get('settings', 'web.admin_password', '')
-    return web.json_response({'success': True, 'is_default': pwd in _WEAK_PASSWORDS or not pwd})
+    is_default = not pwd or (not auth.is_hashed(pwd) and pwd in _WEAK_PASSWORDS)
+    return web.json_response({'success': True, 'is_default': is_default})
 
 
 async def handle_get_bots(request: web.Request):

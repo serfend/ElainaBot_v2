@@ -1,0 +1,41 @@
+# --- Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+*.egg
+
+# --- Virtual Environment ---
+venv/
+.env/
+.venv
+
+# --- IDE / Editor ---
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# --- OS ---
+.DS_Store
+Thumbs.db
+
+# --- Project: Runtime Data ---
+/data/log/
+/data/web/
+/data/session/
+
+# --- Project: Backups ---
+*.bak
+*.ban
+
+# --- Project: WorkBuddy ---
+.workbuddy/
+
+# --- Sensitive Configuration ---
+.env
+*.local.yaml
+config/local.*

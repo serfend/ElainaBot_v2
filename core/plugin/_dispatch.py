@@ -69,9 +69,11 @@ class _DispatchMixin:
         # 全量消息中@自己时, quiet_at_self=true 则抑制系统回复但仍匹配 handler
         suppress_reply = is_non_at or (
             et == 'GROUP_MESSAGE_CREATE' and getattr(event, 'is_at_self', False)
-            and cfg.get_bot_setting(appid, 'non_at_message.quiet_at_self', False)
-            and (not cfg.get_bot_setting(appid, 'non_at_message.quiet_at_self_bot_only', False)
-                 or getattr(event, 'is_bot', False)))
+            and cfg.get_bot_setting(appid, 'non_at_message.quiet_at_self', False))
+        # 其他机器人发送的消息抑制系统回复 (所有事件类型)
+        if not suppress_reply and getattr(event, 'is_bot', False) \
+                and cfg.get_bot_setting(appid, 'message.suppress_bot_system_reply', False):
+            suppress_reply = True
 
         # 过滤仅@其他机器人的全量消息
         if et == 'GROUP_MESSAGE_CREATE' and getattr(event, 'is_at_other_bot', False) \

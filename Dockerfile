@@ -14,8 +14,16 @@ RUN pip install --no-cache-dir -r requirements.txt
 # 复制源码
 COPY . .
 
+# 备份默认配置、插件、模块（用于首次启动时复制到挂载卷）
+RUN cp -r /app/config /app/config.defaults && \
+    cp -r /app/plugins /app/plugins.defaults && \
+    cp -r /app/modules /app/modules.defaults
+
+# 给 entrypoint 脚本执行权限
+RUN chmod +x /app/docker-entrypoint.sh
+
 # 暴露 Web 面板端口（与 settings.yaml 中 server.port 一致）
 EXPOSE 5200
 
-# 启动
-CMD ["python", "main.py"]
+# 入口脚本：首次启动自动复制默认配置
+ENTRYPOINT ["/app/docker-entrypoint.sh"]

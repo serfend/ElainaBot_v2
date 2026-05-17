@@ -45,21 +45,116 @@ def _count_table(appid_filter, table):
     return total
 
 
+_HOURLY_CACHE_TABLE = """CREATE TABLE IF NOT EXISTS hourly_msg_cache (
+    date TEXT NOT NULL, hour INTEGER NOT NULL, count INTEGER DEFAULT 0,
+    PRIMARY KEY(date, hour)
+)"""
+_hourly_table_ready = set()  # 已建表的 appid 集合
+
+
+def _ensure_hourly_table(inst):
+    """确保 data.db 中存在 hourly_msg_cache 表"""
+    appid = getattr(inst, '_appid', id(inst))
+    if appid in _hourly_table_ready:
+        return
+    try:
+        conn = inst.log_service._data_conn
+        lock = inst.log_service._data_lock
+        with lock:
+            conn.execute(_HOURLY_CACHE_TABLE)
+            conn.commit()
+        _hourly_table_ready.add(appid)
+    except Exception:
+        pass
+
+
 def _aggregate_hourly(appid_filter, date):
-    """聚合某天的每小时消息分布, 返回 {hour_str: count}"""
+    """聚合某天的每小时消息分布, 返回 {hour_str: count}
+    已完成的小时从 data.db 缓存读取, 只对当前小时实时查 message.db"""
+    now = datetime.now()
+    is_today = (date == now.strftime('%Y-%m-%d'))
+    is_past_day = (date < now.strftime('%Y-%m-%d'))
+    current_hour = now.hour if is_today else -1
+
     hourly = {}
+
     for _, inst in _iter_bots(appid_filter):
+        _ensure_hourly_table(inst)
+
+        # 从 data.db 缓存读取已有小时数据
+        cached_hours = {}
+        try:
+            rows = inst.log_service.query_data(
+                "SELECT hour, count FROM hourly_msg_cache WHERE date=?", (date,))
+            for r in rows:
+                cached_hours[r['hour']] = r['count']
+        except Exception:
+            pass
+
+        if is_past_day and len(cached_hours) >= 24:
+            # 历史日期且缓存完整, 直接用缓存
+            for h, c in cached_hours.items():
+                hr = f'{h:02d}'
+                hourly[hr] = hourly.get(hr, 0) + c
+            continue
+
+        # 判断哪些小时需要从 message.db 实时查询
+        if is_today:
+            # 今日: 未缓存的已完成小时 + 当前小时
+            need_query_hours = set()
+            for h in range(current_hour + 1):
+                if h == current_hour or h not in cached_hours:
+                    need_query_hours.add(h)
+        else:
+            # 历史: 未缓存的小时
+            need_query_hours = {h for h in range(24) if h not in cached_hours}
+
+        # 先把缓存命中的小时加入结果
+        for h, c in cached_hours.items():
+            if is_today and h == current_hour:
+                continue  # 当前小时不用缓存
+            hr = f'{h:02d}'
+            hourly[hr] = hourly.get(hr, 0) + c
+
+        if not need_query_hours:
+            continue
+
+        # 实时查询 message.db
         try:
             rows = inst.log_service.query(
                 'message',
                 "SELECT substr(timestamp, 12, 2) AS hr, COUNT(*) AS c FROM log GROUP BY hr",
                 date=date)
+            queried = {}
             for r in rows:
-                h = r.get('hr', '')
-                if h:
-                    hourly[h] = hourly.get(h, 0) + r.get('c', 0)
+                h_str = r.get('hr', '')
+                if h_str and h_str.isdigit():
+                    queried[int(h_str)] = r.get('c', 0)
         except Exception:
-            pass
+            continue
+
+        # 合并查询结果并写入缓存
+        to_cache = []
+        for h in need_query_hours:
+            c = queried.get(h, 0)
+            hr = f'{h:02d}'
+            hourly[hr] = hourly.get(hr, 0) + c
+            # 已完成的小时写入缓存 (当前小时不缓存)
+            if h != current_hour:
+                to_cache.append((date, h, c))
+
+        if to_cache:
+            try:
+                conn = inst.log_service._data_conn
+                lock = inst.log_service._data_lock
+                with lock:
+                    conn.executemany(
+                        "INSERT OR REPLACE INTO hourly_msg_cache (date, hour, count) VALUES (?, ?, ?)",
+                        to_cache)
+                    conn.commit()
+            except Exception:
+                pass
+
     return hourly
 
 

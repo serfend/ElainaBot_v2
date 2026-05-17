@@ -83,6 +83,17 @@ async def handle_get_chats(request: web.Request):
                         c['is_full_access'] = c['chat_id'] in fa_ids
                     if chat_type == 'full_access':
                         chats = [c for c in chats if c['is_full_access']]
+                        # 补充没有消息记录的全量群
+                        existing_ids = {c['chat_id'] for c in chats}
+                        for gid in fa_ids:
+                            if gid not in existing_ids:
+                                chats.append({
+                                    'chat_id': gid, 'appid': appid_filter or '',
+                                    'bot_name': '', 'last_id': 0,
+                                    'last_time': '', 'last_date': '',
+                                    'msg_count': 0, 'nickname': f"群{gid[-6:]}",
+                                    'is_full_access': True, 'last_content': '',
+                                })
                 _chat_list_cache[cache_key] = (time.time(), chats)
 
     if search:

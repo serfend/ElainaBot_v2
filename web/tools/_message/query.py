@@ -128,27 +128,6 @@ def _aggregate_chats_sync(chat_type, appid_filter, days=1):
                     item['last_date'] = d
     if not merged:
         return []
-    # 按 last_time 排序, 仅取前 200 个聊天的 last_content
+    # 按 last_time 排序
     chats = sorted(merged.values(), key=lambda c: c.get('last_time', ''), reverse=True)
-    top = chats[:200]
-    by_path = {}
-    for item in top:
-        if item['last_id']:
-            by_path.setdefault((item['appid'], item['last_date']), []).append(item['last_id'])
-    id_to_content = {}
-    for (appid, d), ids in by_path.items():
-        inst = _shared._bot_manager._bots.get(appid)
-        if not inst or not ids:
-            continue
-        for i in range(0, len(ids), 500):
-            chunk = ids[i:i + 500]
-            ph = ','.join('?' * len(chunk))
-            try:
-                rows = inst.log_service.query('message', f"SELECT id, content FROM log WHERE id IN ({ph})", tuple(chunk), date=d)
-                for r in rows:
-                    id_to_content[(appid, r.get('id'))] = r.get('content', '')
-            except Exception:
-                pass
-    for item in top:
-        item['last_content'] = id_to_content.get((item['appid'], item['last_id']), '')
     return chats

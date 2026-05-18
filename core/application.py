@@ -74,6 +74,17 @@ class Application(EventHandlerMixin):
         return self._module_manager
 
     @property
+    def web_app(self):
+        """aiohttp.web.Application 实例"""
+        return self._http_server.app if self._http_server else None
+
+    @property
+    def router(self):
+        """向后兼容: _bot_manager_ref._app.router"""
+        app = self.web_app
+        return app.router if app else None
+
+    @property
     def plugin_manager(self):
         return self._plugin_manager
 

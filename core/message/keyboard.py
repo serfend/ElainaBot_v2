@@ -15,6 +15,7 @@ def build_keyboard(button_rows, appid=None):
             row = row.get('buttons') or row.get('btns') or []
         for btn in row:
             r_data = btn.get('render_data') or {}
+            r_data.setdefault('style', btn.get('style', 1))
             action = btn.get('action') or {}
             action.setdefault('type', btn.get('type', 2))
             action.setdefault('data', btn.get('data', ''))

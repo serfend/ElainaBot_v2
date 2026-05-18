@@ -71,11 +71,20 @@ class SendMessageAction(BaseAction):
         msg_id_ref = self._ctx.find_msg_id(real_id)
 
         ok, data = await MessageSenderService.send(
-            sender, gid, uid, payload, image_bytes, msg_id_ref
+            sender,
+            gid,
+            uid,
+            payload,
+            image_bytes,
+            msg_id_ref,
         )
 
         await self._ctx.log_send(
-            'group' if is_group else 'private', real_id, label, ok, data
+            'group' if is_group else 'private',
+            real_id,
+            label,
+            ok,
+            data,
         )
 
         if ok:

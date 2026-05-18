@@ -2,10 +2,7 @@
 
 from unittest.mock import patch
 
-import pytest
-
 from core.message.keyboard import build_keyboard, build_prompt_keyboard
-
 
 # ==================== build_keyboard 基础结构测试 ====================
 
@@ -279,9 +276,12 @@ class TestBuildKeyboardEnter:
         assert b['action']['type'] == 2
 
     def test_appid_none_defaults_to_false(self):
-        """appid=None 时 button_enter_to_send 默认为 False"""
+        """appid=None 时 button_enter_to_send 默认为 False, enter → action.enter=True"""
         btn = {'text': 'btn', 'type': 2, 'data': 'd', 'enter': True}
         result = build_keyboard([[btn]])
+        b = result['content']['rows'][0]['buttons'][0]
+        assert b['action']['type'] == 2  # type 不变 (button_enter_to_send=False)
+        assert b['action']['enter'] is True
 
 
 # ==================== reply 测试 ====================

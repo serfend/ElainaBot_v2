@@ -120,7 +120,7 @@ def _merge_preserving_comments(original_text: str, new_data: dict) -> str:
     if not original_text.strip():
         return _serialize_templates(new_data)
 
-    sections: list[dict[str, object]] = []
+    sections: list[tuple[str, str | None, list[str], list[str]]] = []
     current_comments: list[str] = []
     current_key = None
     current_lines = []
@@ -154,7 +154,7 @@ def _merge_preserving_comments(original_text: str, new_data: dict) -> str:
     elif current_comments:
         sections.append(('tail', None, current_comments, []))
 
-    output = []
+    output: list[str] = []
     used_keys = set()
 
     for sec_type, key, comments, lines in sections:

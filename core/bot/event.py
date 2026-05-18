@@ -476,7 +476,9 @@ class EventHandlerMixin:
                 (group_id,),
             )
             if rows:
-                user_map = self._parse_user_map(json.loads(rows[0].get('users', '[]')))
+                users_str = rows[0].get('users')
+                users = json.loads(users_str) if users_str else []
+                user_map = self._parse_user_map(users)
                 self._upsert_group_user(user_map, uid, today)
                 bot.log_service.db_queue(
                     'UPDATE groups_users SET users=? WHERE group_id=?',

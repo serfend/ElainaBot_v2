@@ -118,7 +118,7 @@ async def handle_ws(request: web.Request) -> web.WebSocketResponse:
     # 验证 token
     token = request.query.get('token', '')
     if not token or token not in auth.valid_sessions:
-        return web.Response(status=401, text='Unauthorized')
+        return web.Response(status=401, text='Unauthorized')  # type: ignore[return-value]  # auth failure before WS upgrade
 
     ws = web.WebSocketResponse(heartbeat=30)
     await ws.prepare(request)

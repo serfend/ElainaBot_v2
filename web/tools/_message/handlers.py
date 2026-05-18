@@ -4,8 +4,9 @@ import asyncio
 import contextlib
 import time
 from datetime import date as _date
+from typing import Any, cast
 
-from aiohttp import web
+from aiohttp import BodyPartReader, web
 
 import web.tools._message.shared as _shared
 from web.tools._message.log_utils import (
@@ -27,7 +28,7 @@ from web.tools._message.shared import (
 )
 
 # 聊天列表短期缓存 (避免多次刷新同一详情重复诡汇总查询)
-_chat_list_cache: dict[tuple[str, str], tuple[float, list[dict[str, object]]]] = {}
+_chat_list_cache: dict[tuple[str, str, int], tuple[float, list[dict[str, Any]]]] = {}
 _CHAT_LIST_TTL = 30  # 秒
 _chat_list_lock = None  # asyncio.Lock, 延迟初始化
 
@@ -241,7 +242,7 @@ async def handle_send_message(request: web.Request):
             fields = {}
             image_data = None
             while True:
-                part = await reader.next()
+                part = cast(BodyPartReader, await reader.next())
                 if part is None:
                     break
                 name = part.name

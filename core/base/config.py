@@ -187,6 +187,7 @@ class ConfigManager:
         try:
             with open(filepath, encoding='utf-8') as f:
                 data = yaml.safe_load(f) or {}
+            data = self._resolve_env_vars_recursive(data)
         except Exception as e:
             logger.error(f'解析配置失败 [{name}]: {e}')
             return
@@ -331,6 +332,17 @@ class ConfigManager:
             return os.environ.get(var, default)
 
         return _env_pattern.sub(_replacer, text)
+
+    @classmethod
+    def _resolve_env_vars_recursive(cls, data):
+        """递归遍历数据, 对所有字符串值应用 _resolve_env_vars"""
+        if isinstance(data, dict):
+            return {k: cls._resolve_env_vars_recursive(v) for k, v in data.items()}
+        if isinstance(data, list):
+            return [cls._resolve_env_vars_recursive(v) for v in data]
+        if isinstance(data, str):
+            return cls._resolve_env_vars(data)
+        return data
 
     def reload_all(self):
         """强制重新加载所有已缓存的配置"""

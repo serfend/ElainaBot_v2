@@ -3,6 +3,8 @@
 
 from core.application import Application
 
+_bot_manager_ref = None
+
 
 class BotManager:
     """向后兼容的 BotManager (委托给 Application)"""
@@ -49,6 +51,8 @@ class BotManager:
     # ----- 启动 / 关闭 -----
 
     async def start(self):
+        global _bot_manager_ref
+        _bot_manager_ref = self
         return await self._app.start()
 
     async def shutdown(self):

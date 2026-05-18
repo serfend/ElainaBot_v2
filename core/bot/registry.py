@@ -20,6 +20,7 @@ class BotRegistry:
         self._log_base = log_base
         self._on_event = on_event
         self._push_web_log = push_web_log or (lambda t, e: None)
+        self._media_dir = media_dir
 
     @property
     def bots(self):
@@ -52,6 +53,8 @@ class BotRegistry:
         try:
             instance = BotInstance(bot_cfg, self._log_base)
             await instance.start(self._on_event)
+            if self._media_dir:
+                instance.sender.bind_instance(media_dir=self._media_dir)
             self._bots[appid] = instance
             if instance.ws_client:
                 asyncio.create_task(instance.ws_client.connect())

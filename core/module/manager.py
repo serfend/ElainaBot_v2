@@ -350,6 +350,6 @@ class ModuleManager:
         return dict(_DEFAULT_MANIFEST)
 
     async def shutdown(self):
-        """关闭所有已启用模块"""
+        """关闭所有已启用模块 (不改变持久化状态, 重启后按用户设置恢复)"""
         for name in [n for n, i in self._modules.items() if i.instance is not None]:
-            await self.disable(name)
+            await self.disable(name, _persist=False)

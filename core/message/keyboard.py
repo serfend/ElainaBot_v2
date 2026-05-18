@@ -16,6 +16,8 @@ def build_keyboard(button_rows, appid=None):
         for btn in row:
             r_data = btn.get('render_data') or {}
             action = btn.get('action') or {}
+            action.setdefault('type', btn.get('type', 2))
+            action.setdefault('data', btn.get('data', ''))
             b = {
                 'id': btn.get('id') or str(len(buttons)),
                 'render_data': r_data,
@@ -29,10 +31,6 @@ def build_keyboard(button_rows, appid=None):
                 r_data['visited_label'] = show
             if style := btn.get('style'):
                 r_data['style'] = style
-            if type := btn.get('type'):
-                action['type'] = type
-            if data := btn.get('data'):
-                action['data'] = data
 
             # link 优先 (覆盖 type/data)
             if 'link' in btn:
